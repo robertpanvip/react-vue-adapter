@@ -1,0 +1,6 @@
+/packages/react/node_modules/
+/packages/react-dom/node_modules/
+/packages/adapter/node_modules/
+/vue-test/node_modules/
+/node_modules/
+.idea/

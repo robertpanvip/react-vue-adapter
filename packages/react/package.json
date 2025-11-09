@@ -1,0 +1,44 @@
+{
+  "name": "@react-vue/react",
+  "description": "react-shim",
+  "version": "18.2.0",
+  "type": "module",
+  "main": "./index.ts",
+  "scripts": {
+    "dev": "vite",
+    "build-site": "tsc && vite build",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "preview": "vite preview",
+    "compile": "es-pkg compile",
+    "doc": "es-pkg doc",
+    "publish": "es-pkg publish"
+  },
+  "dependencies": {
+  },
+  "devDependencies": {
+    "eslint": "^8.55.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-refresh": "^0.4.5",
+    "typescript": "^5.2.2",
+    "vite": "^5.0.8",
+    "es-pkg": "latest",
+    "vite-plugin-checker": "^0.6.4"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "keywords": [
+    "react-vue-adapter"
+  ],
+  "homepage": "https://github.com/robertpanvip@163.com/react-vue-adapter.git",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/robertpanvip@163.com/react-vue-adapter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/robertpanvip@163.com/react-vue-adapter/issues"
+  },
+  "author": "robertpanvip@163.com",
+  "license": "ISC"
+}

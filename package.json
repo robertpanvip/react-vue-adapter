@@ -1,0 +1,26 @@
+{
+  "name": "react-vue-adapter",
+  "version": "1.0.0",
+  "description": "react-to-vue",
+  "workspaces": [
+    "./packages/*"
+  ],
+  "homepage": "https://github.com/robertpanvip/es-pkg.git",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/robertpanvip/es-pkg.git"
+  },
+  "bugs": {
+    "url": "https://github.com/robertpanvip/es-pkg/issues"
+  },
+  "author": "pan",
+  "license": "ISC",
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.3",
+    "@vue/tsconfig": "^0.7.0",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5",
+    "vue-tsc": "^2.2.8",
+    "antd": "latest"
+  }
+}

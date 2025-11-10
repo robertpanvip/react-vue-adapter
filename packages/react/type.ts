@@ -1,5 +1,3 @@
-import type {Component} from './index'
-
 export type FC<P = {}> = FunctionComponent<P>;
 /**
  * React 支持的子节点类型（ReactNode）
@@ -44,6 +42,37 @@ export interface FunctionComponent<P = {}> {
     defaultProps?: Partial<P>;
 }
 
+interface NewLifecycle<P, S, SS> {
+    getSnapshotBeforeUpdate?(prevProps: Readonly<P>, prevState: Readonly<S>): SS | null;
+    componentDidUpdate?(prevProps: Readonly<P>, prevState: Readonly<S>, snapshot?: SS): void;
+}
+
+interface ErrorInfo {
+    componentStack?: string | null;
+    digest?: string | null;
+}
+
+export interface ComponentLifecycle<P, S, SS = any> extends NewLifecycle<P, S, SS>{
+    componentDidMount?(): void;
+    shouldComponentUpdate?(nextProps: Readonly<P>, nextState: Readonly<S>, nextContext: any): boolean;
+    componentWillUnmount?(): void;
+    componentDidCatch?(error: Error, errorInfo: ErrorInfo): void;
+}
+
+export interface Component<P = {}, S = {}, SS = any> extends ComponentLifecycle<P, S, SS> {
+    context: unknown;
+    name?:string
+    defaultProps?: P;
+    displayName?: string | undefined;
+    forceUpdate(callback?: () => void): void;
+    render(): ReactNode;
+    setState<K extends keyof S>(
+        state: ((prevState: Readonly<S>, props: Readonly<P>) => Pick<S, K> | S | null) | (Pick<S, K> | S | null),
+        callback?: () => void,
+    ): void;
+    readonly props: Readonly<P>;
+    state: Readonly<S>;
+}
 /**
  * memo 组件包装类型
  */
@@ -51,13 +80,13 @@ export interface MemoExoticComponent<P = {}> extends FunctionComponent<P> {
     readonly type: FunctionComponent<P>;
 }
 
-interface ExoticComponent<P = {}> {
+export interface ExoticComponent<P = {}> {
     (props: P): ReactNode;
 
     readonly $$typeof: symbol;
 }
 
-interface NamedExoticComponent<P = {}> extends ExoticComponent<P> {
+export interface NamedExoticComponent<P = {}> extends ExoticComponent<P> {
     displayName?: string | undefined;
 }
 
@@ -162,6 +191,8 @@ export interface RefAttributes<T> extends Attributes {
 export interface ReactPortal extends ReactElement {
     children: ReactNode;
 }
-
+export type SetStateAction<S> = S | ((prevState: S) => S);
 export type Dispatch<A> = (value: A) => void;
 export type Reducer<S, A> = (prevState: S, action: A) => S;
+
+

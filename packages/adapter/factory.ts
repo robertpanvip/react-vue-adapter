@@ -18,7 +18,6 @@ import {
 } from '@react-vue/react';
 import {vuePropsToReactProps} from "./util";
 
-
 // 工厂函数：将 React 组件转换为 Vue 组件
 export function factory<P = {}>(
     ReactComponent: ComponentType
@@ -30,7 +29,6 @@ export function factory<P = {}>(
             // 每个 wrapper 有独立 runtime
             const runtime: Runtime = CurrentReactContext.createReactRuntime();
             const version = ref(0);
-
             // 组件卸载时清理副作用
             onUnmounted(() => {
                 cleanupEffects(runtime);
@@ -46,7 +44,9 @@ export function factory<P = {}>(
                     runtime.hookIndex = 0;
 
                     const _props = vuePropsToReactProps(props as any, context);
-                    console.log(_props);
+                    _props.ref = (node: object) => {
+                        context.expose(node)
+                    }
                     const ele = createElement(ReactComponent, _props);
                     result = createVNodeFromReactElement(ele);
                     // 同步执行 layout effects（React 的 useLayoutEffect）

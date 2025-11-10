@@ -13,7 +13,6 @@ import {
 } from 'vue';
 import {normalizeStyle} from "./style";
 import type * as Type from './type'
-import {Context} from "./type";
 
 export * from './type'
 
@@ -77,7 +76,7 @@ export interface Runtime {
     hookIndex: number; // 当前 hooks 调用索引（确保顺序性）
     pendingEffects: Effect[]; // 待执行的副作用（useEffect）
     pendingLayoutEffects: Effect[]; // 待执行的副作用（useLayoutEffects）
-    contextMap: Map<Context<any>, any>; // 存储 Context 订阅
+    contextMap: Map<Type.Context<any>, any>; // 存储 Context 订阅
 }
 
 // 单个 Hook 的类型（支持不同类型的 hook）
@@ -200,9 +199,14 @@ export function createVNodeFromReactElement(ele: Type.ReactNode): VNode {
 
     // 5. 处理原生标签（div、span 等）
     if (typeof type === 'string') {
-
         const {children, ...rest} = props;
         const v = createVNodeFromReactElement(children);
+        const ref = rest.ref;
+        if (ref && typeof ref === 'object') {
+            rest.ref = (node: VNode) => {
+                ref.current = node;
+            }
+        }
         return h(type, rest, v);
     }
 
@@ -335,7 +339,7 @@ namespace React {
     export type Ref<T> = Type.Ref<T>;
     export type LegacyRef<T> = Type.LegacyRef<T>;
     export type ForwardedRef<T> = Type.ForwardedRef<T>;
-    export type Key<T> = Type.Key;
+    export type Key = Type.Key;
     export type Attributes = Type.Attributes;
     export type RefAttributes<T> = Type.RefAttributes<T>;
     export type ReactPortal = Type.ReactPortal;
@@ -350,18 +354,14 @@ namespace React {
 
     // === Hooks 实现 ===
     export function useState<T>(initialState: T | (() => T)): [T, Dispatch<SetStateAction<T>>] {
-        const runtime = ensureCurrentRuntime();
-        const index = runtime.hookIndex++;
 
-        // 初始化状态（只在首次调用时执行）
-        if (!runtime.hooks[index]) {
+        const [_, hook] = ensureHooks(() => {
             const initialValue = typeof initialState === 'function'
                 ? (initialState as () => T)()
                 : initialState;
-            runtime.hooks[index] = {type: 'state', ref: ref<T>(initialValue)};
-        }
+            return {type: 'state', ref: ref<T>(initialValue)}
+        })
 
-        const hook = runtime.hooks[index] as { type: 'state'; ref: VueRef<T> };
         const stateRef = hook.ref;
 
         // 状态更新函数（严格模拟 React 的 updater 逻辑）
@@ -379,23 +379,12 @@ namespace React {
     }
 
     export function useEffect(effect: () => (() => void) | void, deps?: any[]) {
-        const runtime = ensureCurrentRuntime();
-        const index = runtime.hookIndex++;
 
-        // 初始化 effect 数据
-        if (!runtime.hooks[index]) {
-            runtime.hooks[index] = {
-                type: 'effect',
-                deps: ref<any[] | undefined>(deps),
-                cleanup: ref<(() => void) | null>(null),
-            };
-        }
-
-        const hook = runtime.hooks[index] as {
-            type: 'effect';
-            deps: VueRef<any[] | undefined>;
-            cleanup: VueRef<(() => void) | null>;
-        };
+        const [runtime, hook] = ensureHooks({
+            type: 'effect',
+            deps: ref<any[] | undefined>(deps),
+            cleanup: ref<(() => void) | null>(null),
+        })
 
         // 检查依赖是否变化（严格模拟 React 的浅比较）
         const depsChanged = !hook.deps.value
@@ -418,22 +407,12 @@ namespace React {
     }
 
     export function useMemo<T>(factory: () => T, deps: any[]): T {
-        const runtime = ensureCurrentRuntime();
-        const index = runtime.hookIndex++;
 
-        if (!runtime.hooks[index]) {
-            runtime.hooks[index] = {
-                type: 'memo',
-                deps: ref(deps),
-                value: ref<T>(factory()),
-            };
-        }
-
-        const hook = runtime.hooks[index] as {
-            type: 'memo';
-            deps: VueRef<any[]>;
-            value: VueRef<T>;
-        };
+        const [_, hook] = ensureHooks({
+            type: 'memo',
+            deps: ref(deps),
+            value: ref<T>(factory()),
+        })
 
         // 依赖变化时重新计算（同 React 逻辑）
         const depsChanged = hook.deps.value.some((dep: any, i: number) => dep !== deps[i]);
@@ -446,17 +425,12 @@ namespace React {
     }
 
     export function useRef<T>(initialValue?: T): { current: T | undefined } {
-        const runtime = ensureCurrentRuntime();
-        const index = runtime.hookIndex++;
 
-        if (!runtime.hooks[index]) {
-            runtime.hooks[index] = {
-                type: 'ref',
-                ref: shallowRef<{ current: T | undefined }>({current: initialValue}),
-            };
-        }
+        const [_, hook] = ensureHooks({
+            type: 'ref',
+            ref: shallowRef<{ current: T | undefined }>({current: initialValue}),
+        })
 
-        const hook = runtime.hooks[index] as { type: 'ref'; ref: ShallowRef<{ current: T | undefined }> };
         return hook.ref.value; // 返回 { current }，与 React 一致
     }
 
@@ -504,15 +478,10 @@ namespace React {
         ref: Ref<T> | undefined,
         create: () => T
     ) {
-        const runtime = ensureCurrentRuntime();
-        const index = runtime.hookIndex++;
-        if (!runtime.hooks[index]) {
-            runtime.hooks[index] = {type: 'imperative', ref: shallowRef(null)};
-        }
-        const hook = runtime.hooks[index] as any;
         if (typeof create !== 'function') {
             throw new Error(`Unsupported create type: ${typeof create}`);
         }
+        const [_, hook] = ensureHooks({type: 'imperative', ref: shallowRef<T | null>(null)})
         hook.ref.value = create();
         // 1. 处理 ref 同步（支持函数和 Ref 对象）
         const syncRef = (instance: T | null) => {
@@ -538,25 +507,24 @@ namespace React {
         return elementType as unknown as ForwardRefExoticComponent<PropsWithoutRef<P> & RefAttributes<T>>;
     }
 
+    function ensureHooks<T extends Hook>(defaultHook: T | (() => T)) {
+        const runtime = ensureCurrentRuntime();
+        const index = runtime.hookIndex++;
+        if (!runtime.hooks[index]) {
+            runtime.hooks[index] = typeof defaultHook === 'function' ? defaultHook() : defaultHook;
+        }
+        return [runtime, runtime.hooks[index] as T] as const
+    }
+
     export function useLayoutEffect(
         effect: () => (() => void) | void,
         deps?: any[]
     ) {
-        const runtime = ensureCurrentRuntime();
-        const index = runtime.hookIndex++;
-
-        if (!runtime.hooks[index]) {
-            runtime.hooks[index] = {
-                type: 'layoutEffect',
-                deps: ref(deps),
-                cleanup: ref<(() => void) | null>(null),
-            };
-        }
-
-        const hook = runtime.hooks[index] as {
-            deps: VueRef<any[] | undefined>;
-            cleanup: VueRef<(() => void) | null>;
-        };
+        const [runtime, hook] = ensureHooks({
+            type: 'layoutEffect',
+            deps: ref(deps),
+            cleanup: ref<(() => void) | null>(null),
+        })
 
         const depsChanged = !hook.deps.value
             ? true
@@ -579,23 +547,12 @@ namespace React {
         effect: () => (() => void) | void,
         deps?: any[]
     ) {
-        const runtime = ensureCurrentRuntime();
-        const index = runtime.hookIndex++;
 
-        // 初始化 effect 数据（复用类似 useEffect 的存储逻辑）
-        if (!runtime.hooks[index]) {
-            runtime.hooks[index] = {
-                type: 'insertionEffect', // 新增类型标识
-                deps: deps ? [...deps] : undefined,
-                cleanup: null as (() => void) | null,
-            };
-        }
-
-        const hook = runtime.hooks[index] as {
-            type: 'insertionEffect';
-            deps: any[] | undefined;
-            cleanup: (() => void) | null;
-        };
+        const [_, hook] = ensureHooks({
+            type: 'insertionEffect', // 新增类型标识
+            deps: deps ? [...deps] : undefined,
+            cleanup: null as (() => void) | null,
+        })
 
         // 检查依赖是否变化（浅比较）
         const depsChanged = !hook.deps
@@ -649,12 +606,8 @@ namespace React {
     let idCounter = 0;
 
     export function useId() {
-        const runtime = ensureCurrentRuntime();
-        const index = runtime.hookIndex++;
-        if (!runtime.hooks[index]) {
-            runtime.hooks[index] = {type: 'id', value: `:${idCounter++}:`};
-        }
-        return (runtime.hooks[index] as any).value;
+        const [_, hook] = ensureHooks({type: 'id', value: `:${idCounter++}:`})
+        return hook.value;
     }
 
 // 模拟useTransition：返回[startTransition, isPending]
@@ -762,12 +715,13 @@ namespace React {
                 }
             }
         }
+        const _children = normalizedProps.children || (children.length == 1 ? children[0] : children)
 
         const element = {
             type: type,
             props: {
                 ...normalizedProps,
-                children: normalizedProps.children || (children.length == 1 ? children[0] : children)
+                children: _children.length == 0 ? null : _children
             },
             $$typeof: REACT_ELEMENT_TYPE
         }
@@ -855,13 +809,12 @@ namespace React {
         }
 
         setState<K extends keyof S>(
-            state: ((prevState: Readonly<S>, props: Readonly<P>) => Pick<S, K> | S | null) | (Pick<S, K> | S | null),
-            callback?: () => void,
+            _state: ((prevState: Readonly<S>, props: Readonly<P>) => Pick<S, K> | S | null) | (Pick<S, K> | S | null),
+            _callback?: () => void,
         ): void {
-
         };
 
-        forceUpdate(callback?: () => void): void {
+        forceUpdate(_callback?: () => void): void {
         };
 
         render(): ReactNode {
@@ -871,7 +824,7 @@ namespace React {
 
 
     export class PureComponent<P = {}, S = {}> extends Component<P, S> {
-        shouldComponentUpdate(_nextProps, _nextState) {
+        shouldComponentUpdate(_nextProps: P, _nextState: S) {
             return true;
         }
     }
@@ -882,12 +835,19 @@ export const useState = React.useState;
 export const useEffect = React.useEffect;
 export const useMemo = React.useMemo;
 export const useRef = React.useRef;
+export const useCallback = React.useCallback;
 export const createContext = React.createContext;
 export const useContext = React.useContext;
 export const useImperativeHandle = React.useImperativeHandle;
+export const useInsertionEffect = React.useInsertionEffect;
+export const useReducer = React.useReducer;
+export const useTransition = React.useTransition;
 export const useLayoutEffect = React.useLayoutEffect;
 export const useId = React.useId;
+
 export const createElement = React.createElement;
+export const memo = React.memo;
+export const Children = React.Children;
 export const cloneElement = React.cloneElement;
 export const forwardRef = React.forwardRef;
 export const Fragment = React.Fragment;

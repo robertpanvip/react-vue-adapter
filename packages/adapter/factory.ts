@@ -29,11 +29,12 @@ export function factory<P = {}>(
             // 每个 wrapper 有独立 runtime
             const runtime: Runtime = CurrentReactContext.createReactRuntime();
             const version = ref(0);
+            const expose = {}
             // 组件卸载时清理副作用
             onUnmounted(() => {
                 cleanupEffects(runtime);
             });
-
+            context.expose(expose)
             // Vue 的渲染函数 —— 在这里创建 VNode（保证 ref owner 正确）
             return () => {
                 // 在 Vue 的 render 上下文内执行 ReactComponent，
@@ -45,7 +46,7 @@ export function factory<P = {}>(
 
                     const _props = vuePropsToReactProps(props as any, context);
                     _props.ref = (node: object) => {
-                        context.expose(node)
+                        Object.assign(expose, node)
                     }
                     const ele = createElement(ReactComponent, _props);
                     result = createVNodeFromReactElement(ele);

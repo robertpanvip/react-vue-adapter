@@ -2,6 +2,8 @@ import {
     defineComponent,
     ref,
     type VNode,
+    onMounted,
+    onUpdated,
     onUnmounted,
     Fragment,
     h,
@@ -15,6 +17,7 @@ import {
     type ComponentType,
     createElement,
     CurrentReactContext,
+    flushInsertionEffects,
 } from '@react-vue/react';
 import {vuePropsToReactProps} from "./util";
 
@@ -29,12 +32,22 @@ export function factory<P = {}>(
             // 每个 wrapper 有独立 runtime
             const runtime: Runtime = CurrentReactContext.createReactRuntime();
             const version = ref(0);
-            const expose = {}
+            const expose = Object.create(null)
             // 组件卸载时清理副作用
             onUnmounted(() => {
                 cleanupEffects(runtime);
             });
-            context.expose(expose)
+            context.expose(expose);
+
+            // ✅ 在组件挂载和更新后执行 React 的同步副作用
+            const runReactCommitPhase = () => {
+                flushInsertionEffects(runtime); // 先样式
+                flushLayoutEffects(runtime);    // 再 layout
+                Promise.resolve().then(() => flushEffects(runtime)); // 最后异步 effect
+            };
+
+            onMounted(runReactCommitPhase);
+            onUpdated(runReactCommitPhase);
             // Vue 的渲染函数 —— 在这里创建 VNode（保证 ref owner 正确）
             return () => {
                 // 在 Vue 的 render 上下文内执行 ReactComponent，
@@ -45,24 +58,15 @@ export function factory<P = {}>(
                     runtime.hookIndex = 0;
 
                     const _props = vuePropsToReactProps(props as any, context);
+                    console.log(_props);
                     _props.ref = (node: object) => {
                         Object.assign(expose, node)
                     }
                     const ele = createElement(ReactComponent, _props);
                     result = createVNodeFromReactElement(ele);
-                    // 同步执行 layout effects（React 的 useLayoutEffect）
-                    flushLayoutEffects(runtime);
                 } finally {
                     CurrentReactContext.pop();
                 }
-
-                // 异步（微任务）执行普通 effects（React 的 useEffect）
-                // 放在微任务里以保证在 DOM 更新后执行
-                Promise.resolve().then(() => {
-                    // flushEffects 内部会 scheduleEffect 执行 effect.fn
-                    flushEffects(runtime);
-                });
-
                 return h(Fragment, {key: version.value}, [result]);
             };
         },

@@ -1,4 +1,5 @@
-//import {Switch} from 'antd'
+import Select from 'rc-select'
+import 'rc-select/assets/index.css'
 import React from '@react-vue/react'
 import {factory} from '@react-vue/adapter'
 
@@ -12,4 +13,4 @@ const Button = (props) => {
         props.children
     )
 }
-export default factory(Button)
+export default factory(Select)

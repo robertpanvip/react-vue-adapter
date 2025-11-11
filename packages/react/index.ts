@@ -57,6 +57,7 @@ export const CurrentReactContext: Dispatcher = {
             hookIndex: 0,
             pendingEffects: [],
             pendingLayoutEffects: [],
+            pendingInsertionEffects: [],
             contextMap: new Map(),
         };
     }
@@ -76,20 +77,21 @@ export interface Runtime {
     hookIndex: number; // 当前 hooks 调用索引（确保顺序性）
     pendingEffects: Effect[]; // 待执行的副作用（useEffect）
     pendingLayoutEffects: Effect[]; // 待执行的副作用（useLayoutEffects）
+    pendingInsertionEffects: Effect[]; // 待执行的副作用（useInsertionEffects）
     contextMap: Map<Type.Context<any>, any>; // 存储 Context 订阅
 }
 
 // 单个 Hook 的类型（支持不同类型的 hook）
 type Hook =
-    | { type: 'state'; ref: VueRef<any> }
+    | { type: 'state'; ref: VueRef<any>, updateQueue?: (() => void)[], isFlushing?: boolean }
     | { type: 'ref'; ref: ShallowRef<{ current: any }> }
-    | { type: 'memo'; deps: VueRef<any[]>; value: VueRef<any> }
-    | { type: 'callback'; deps: VueRef<any[]>; value: VueRef<Function> }
+    | { type: 'memo'; deps: unknown[] | undefined; value: VueRef<any> }
+    | { type: 'callback'; deps: unknown[] | undefined; value: VueRef<Function> }
     | { type: 'imperative', ref: ShallowRef }
     | { type: 'id', value: string }
-    | { type: 'effect'; deps: VueRef<any[] | undefined>; cleanup: VueRef<(() => void) | null> }
-    | { type: 'layoutEffect'; deps: VueRef<any[] | undefined>; cleanup: VueRef<(() => void) | null> }
-    | { type: 'insertionEffect'; deps: any[] | undefined; cleanup: (() => void) | null };
+    | { type: 'effect'; deps: unknown[] | undefined; cleanup: VueRef<(() => void) | null> }
+    | { type: 'layoutEffect'; deps: unknown[]; cleanup: VueRef<(() => void) | null> }
+    | { type: 'insertionEffect'; deps: unknown[] | undefined; cleanup: (() => void) | null };
 
 // 副作用类型（模拟 React 的 effect 调度）
 interface Effect {
@@ -127,11 +129,7 @@ export function flushEffects(runtime: Runtime) {
     runtime.pendingEffects.forEach(effect => {
         scheduleEffect(() => {
             const cleanup = effect.fn();
-            // 更新 hook 中的清理函数（供下次使用）
-            const index = runtime.hookIndex - runtime.pendingEffects.length; // 计算对应 hook 索引
-            if (runtime.hooks[index]?.type === 'effect') {
-                (runtime.hooks[index] as any).cleanup.value = typeof cleanup === 'function' ? cleanup : null;
-            }
+            if (typeof cleanup === 'function') effect.cleanup = cleanup;
         });
     });
 
@@ -148,6 +146,15 @@ export function cleanupEffects(runtime: Runtime) {
     });
 }
 
+export function flushInsertionEffects(runtime: Runtime) {
+    const effects = runtime.pendingInsertionEffects || [];
+    runtime.pendingInsertionEffects = [];
+    effects.forEach(e => e.cleanup?.());
+    effects.forEach(e => {
+        const cleanup = e.fn();
+        if (typeof cleanup === 'function') e.cleanup = cleanup;
+    });
+}
 
 export function flushLayoutEffects(runtime: Runtime) {
     const effects = runtime.pendingLayoutEffects || [];
@@ -159,15 +166,7 @@ export function flushLayoutEffects(runtime: Runtime) {
     // 2. 同步执行新 effect
     effects.forEach(e => {
         const cleanup = e.fn();
-        if (typeof cleanup === 'function') {
-            // 找到对应 hook，更新 cleanup
-            const hookIndex = runtime.hooks.findIndex(
-                h => h.type === 'layoutEffect' && h.deps.value === e.deps
-            );
-            if (hookIndex !== -1) {
-                (runtime.hooks[hookIndex] as any).cleanup.value = cleanup;
-            }
-        }
+        if (typeof cleanup === 'function') e.cleanup = cleanup;
     });
 }
 
@@ -224,6 +223,8 @@ export function createVNodeFromReactElement(ele: Type.ReactNode): VNode {
                 const _props = {children: children};
                 result = Consumer(_props);
                 // 转发 ref 的组件
+            } else {
+                result = (type as Type.FunctionComponent)(props);
             }
             return createVNodeFromReactElement(result) as VNode;
         }
@@ -359,68 +360,74 @@ namespace React {
             const initialValue = typeof initialState === 'function'
                 ? (initialState as () => T)()
                 : initialState;
-            return {type: 'state', ref: ref<T>(initialValue)}
+            return {
+                type: 'state',
+                ref: ref<T>(initialValue),
+                isFlushing: false as boolean,
+                updateQueue: [] as (() => void)[]
+            }
         })
 
         const stateRef = hook.ref;
 
-        // 状态更新函数（严格模拟 React 的 updater 逻辑）
-        const setState = (updater: T | ((prev: T) => T)) => {
+        const flushUpdates = () => {
+            if (hook.isFlushing) return;
+            hook.isFlushing = true;
+            Promise.resolve().then(() => {
+                const queue = hook.updateQueue.splice(0, hook.updateQueue.length);
+                queue.forEach(fn => fn());
+                hook.isFlushing = false;
+            });
+        };
+
+        const setState: Dispatch<SetStateAction<T>> = (updater) => {
             const newValue = typeof updater === 'function'
                 ? (updater as (prev: T) => T)(stateRef.value)
                 : updater;
-
             if (newValue !== stateRef.value) {
-                stateRef.value = newValue;
+                hook.updateQueue.push(() => {
+                    stateRef.value = newValue;
+                });
+                flushUpdates();
             }
         };
 
         return [stateRef.value, setState];
     }
 
-    export function useEffect(effect: () => (() => void) | void, deps?: any[]) {
+    export function useEffect(effect: () => (() => void) | void, deps: any[] = []) {
 
         const [runtime, hook] = ensureHooks({
             type: 'effect',
-            deps: ref<any[] | undefined>(deps),
+            deps: undefined as any,
             cleanup: ref<(() => void) | null>(null),
         })
 
         // 检查依赖是否变化（严格模拟 React 的浅比较）
-        const depsChanged = !hook.deps.value
-            ? true
-            : !deps
-                ? true
-                : hook.deps.value.length !== deps.length
-                    ? true
-                    : hook.deps.value.some((dep: any, i: number) => dep !== deps[i]);
-
-        if (depsChanged) {
+        if (depsChanged(hook.deps, deps)) {
             // 存储新的副作用（将在渲染后异步执行）
             runtime.pendingEffects.push({
                 fn: effect,
                 cleanup: hook.cleanup.value,
                 deps,
             });
-            hook.deps.value = deps; // 更新依赖缓存
+            hook.deps = deps; // 更新依赖缓存
         }
     }
 
-    export function useMemo<T>(factory: () => T, deps: any[]): T {
+    export function useMemo<T>(factory: () => T, deps: any[] = []): T {
 
         const [_, hook] = ensureHooks({
             type: 'memo',
-            deps: ref(deps),
+            deps: undefined as any,
             value: ref<T>(factory()),
         })
 
         // 依赖变化时重新计算（同 React 逻辑）
-        const depsChanged = hook.deps.value.some((dep: any, i: number) => dep !== deps[i]);
-        if (depsChanged) {
-            hook.deps.value = deps;
+        if (depsChanged(hook.deps, deps)) {
+            hook.deps = deps;
             hook.value.value = factory();
         }
-
         return hook.value.value;
     }
 
@@ -518,62 +525,58 @@ namespace React {
 
     export function useLayoutEffect(
         effect: () => (() => void) | void,
-        deps?: any[]
+        deps: unknown[] = []
     ) {
         const [runtime, hook] = ensureHooks({
             type: 'layoutEffect',
-            deps: ref(deps),
+            deps: undefined as any,
             cleanup: ref<(() => void) | null>(null),
         })
 
-        const depsChanged = !hook.deps.value
-            ? true
-            : !deps
-                ? true
-                : hook.deps.value.some((d, i) => d !== deps[i]);
-
-        if (depsChanged) {
+        if (depsChanged(hook.deps, deps)) {
             runtime.pendingLayoutEffects = runtime.pendingLayoutEffects || [];
             runtime.pendingLayoutEffects.push({
                 fn: effect,
                 cleanup: hook.cleanup.value,
                 deps,
             });
-            hook.deps.value = deps;
-        }
-    }
-
-    export function useInsertionEffect(
-        effect: () => (() => void) | void,
-        deps?: any[]
-    ) {
-
-        const [_, hook] = ensureHooks({
-            type: 'insertionEffect', // 新增类型标识
-            deps: deps ? [...deps] : undefined,
-            cleanup: null as (() => void) | null,
-        })
-
-        // 检查依赖是否变化（浅比较）
-        const depsChanged = !hook.deps
-            ? true
-            : !deps
-                ? true
-                : hook.deps.length !== deps.length
-                    ? true
-                    : hook.deps.some((dep: any, i: number) => dep !== deps[i]);
-
-        if (depsChanged) {
-            // 先执行上一次的清理函数
-            if (hook.cleanup) {
-                hook.cleanup();
-            }
-            // 同步执行 effect（核心：确保在 DOM 渲染前执行）
-            const cleanup = effect();
-            hook.cleanup = typeof cleanup === 'function' ? cleanup : null;
             hook.deps = deps ? [...deps] : undefined;
         }
     }
+
+    function depsChanged(oldDeps: any[] | undefined, newDeps: any[] | undefined): boolean {
+        // 没有旧依赖或新依赖未传，认为变化了
+        if (!oldDeps || !newDeps) return true;
+
+        // 长度不一致也算变化
+        if (oldDeps.length !== newDeps.length) return true;
+
+        // 每个元素浅比较
+        for (let i = 0; i < oldDeps.length; i++) {
+            if (oldDeps[i] !== newDeps[i]) return true;
+        }
+
+        return false;
+    }
+
+    export function useInsertionEffect(effect: () => void | (() => void), deps?: unknown[]) {
+
+        const [runtime, hook] = ensureHooks({
+            type: 'insertionEffect',
+            deps: undefined as any,
+            cleanup: null,
+        });
+        if (depsChanged(hook.deps, deps)) {
+            runtime.pendingInsertionEffects = runtime.pendingInsertionEffects || [];
+            runtime.pendingInsertionEffects.push({
+                fn: effect,
+                cleanup: hook.cleanup,
+                deps
+            });
+            hook.deps = deps ? [...deps] : undefined;
+        }
+    }
+
 
 // 支持 initializer 函数的完整版本
     export function useReducer<S, A>(
@@ -628,7 +631,31 @@ namespace React {
         return [startTransition, isPending] as const;
     }
 
+    /**
+     * 默认浅比较实现
+     * 对象类型只比较第一层属性，其他类型直接 ===
+     */
+    const shallowEqual: AreEqual<any> = (prev, next) => {
+        if (prev === next) return true;
 
+        if (
+            typeof prev !== 'object' || prev === null ||
+            typeof next !== 'object' || next === null
+        ) {
+            return false;
+        }
+
+        const prevKeys = Object.keys(prev);
+        const nextKeys = Object.keys(next);
+
+        if (prevKeys.length !== nextKeys.length) return false;
+
+        for (let key of prevKeys) {
+            if ((prev as any)[key] !== (next as any)[key]) return false;
+        }
+
+        return true;
+    };
     /**
      * areEqual 函数签名
      * prevProps 和 nextProps 必须结构相同
@@ -637,11 +664,13 @@ namespace React {
 
     export function memo<P extends object>(
         Component: FC<P>,
-        areEqual?: AreEqual<P>
+        areEqual: AreEqual<P> = shallowEqual
     ): FC<P> {
         return ((props: P) => {
+
             const prev = useRef<P | null>(null);
             const cached = useRef<ReactNode | null>(null);
+
             if (!prev.current || !areEqual?.(prev.current, props)) {
                 prev.current = props;
                 cached.current = Component(props);
@@ -715,13 +744,13 @@ namespace React {
                 }
             }
         }
-        const _children = normalizedProps.children || (children.length == 1 ? children[0] : children)
+        const _children = flattenChildren([...children, props?.children]);
 
         const element = {
             type: type,
             props: {
                 ...normalizedProps,
-                children: _children.length == 0 ? null : _children
+                children: _children?.length == 0 ? null : _children.length === 1 ? _children[0] : _children
             },
             $$typeof: REACT_ELEMENT_TYPE
         }
@@ -824,8 +853,8 @@ namespace React {
 
 
     export class PureComponent<P = {}, S = {}> extends Component<P, S> {
-        shouldComponentUpdate(_nextProps: P, _nextState: S) {
-            return true;
+        shouldComponentUpdate(nextProps: P, nextState: S) {
+            return !shallowEqual(this.props, nextProps as Readonly<P>) || !shallowEqual(this.state, nextState as Readonly<S>);
         }
     }
 

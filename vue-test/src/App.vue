@@ -6,6 +6,7 @@ import RcInput from './components/RcInput.ts';
 //import AntdConfigProvider from './components/AntdConfigProvider.ts';
 import AntdInput from './components/AntdInput.ts';
 import Select from './components/Select.ts';
+import Trigger from './components/Trigger.ts';
 //import Alert from './components/Alert.ts';
 import Result from './components/Result.ts';
 import Spin from './components/Spin.ts';
@@ -19,11 +20,20 @@ onMounted(() => {
 })
 </script>
 <template>
-<!--  <Provider :value="{}">
-    <div>123</div>
-  </Provider>-->
+  <!--  <Provider :value="{}">
+      <div>123</div>
+    </Provider>-->
   <!--  <RcInput />-->
-    <Select :options="[{label:`1232`,value:`12`}]" />
+  <Trigger :action="['click']" :popupAlign="{
+                points: ['tl', 'bl'],
+                offset: [0, 3],
+            }">
+    <button>trigger</button>
+    <template #popup>
+      <div>123</div>
+    </template>
+  </Trigger>
+<!--  <Select :options="[{label:`1232`,value:`12`}]"/>-->
   <!--  <Alert message="Success Text" type="success" />-->
   <!--  <Button type="primary" key="console">
       Go Console
@@ -41,14 +51,14 @@ onMounted(() => {
   <!--  <Pagination defaultCurrent="1" total="50" />-->
   <!--  <Switch/>-->
 
-<!--    <Modal
-        title="Basic Modal"
-        :open="true"
-    >
-      <p>Some contents...</p>
-      <p>Some contents...</p>
-      <p>Some contents...</p>
-    </Modal>-->
+  <!--    <Modal
+          title="Basic Modal"
+          :open="true"
+      >
+        <p>Some contents...</p>
+        <p>Some contents...</p>
+        <p>Some contents...</p>
+      </Modal>-->
 
   <!--  <AntdConfigProvider>
 

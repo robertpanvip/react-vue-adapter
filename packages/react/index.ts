@@ -1,4 +1,5 @@
 import {
+    cloneVNode,
     Fragment as VueFragment,
     h,
     isRef,
@@ -6,8 +7,8 @@ import {
     type Ref as VueRef,
     shallowRef,
     type ShallowRef,
-    Text,
     type Slots,
+    Text,
     type VNode,
     type VNodeArrayChildren,
 } from 'vue';
@@ -21,8 +22,9 @@ const FORWARD_REF_SYMBOL = Symbol.for('react.forward_ref');
 const PROVIDER_SYMBOL = Symbol.for('react.provider');
 const CONSUMER_SYMBOL = Symbol.for('react.consumer');
 const REACT_ELEMENT_TYPE = Symbol.for('react.element');
+const REACT_FRAGMENT = Symbol.for('react.fragment');
 const VUE_SLOT_TYPE = Symbol.for('vue.slot');
-
+const VUE_SLOT_CREATOR_TYPE = Symbol.for('vue.slot.creator');
 // === 模拟 React Fiber 架构的上下文管理 ===
 interface RuntimeNode {
     runtime: Runtime;
@@ -292,26 +294,31 @@ function wrapClassComponent<P, S = {}>(ComponentClass: typeof Component<P, S>): 
     };
 }
 
-export function createSlot(name: string, context: { slots: Slots }) {
-    const Slot = (props: { args: unknown[] }) => {
-        const fn = context.slots[name] || (() => void 0)
-        const type = fn(...(props.args || []))
-        return type as unknown as VNode
-    }
-    Slot.$$typeof = VUE_SLOT_TYPE;
-
-    const CallAble = (...args: unknown[]) => {
+function createCallable(Slot: Function) {
+    const Callable = (...args: unknown[]) => {
         return {
             type: Slot,
             props: {
-                args
+                _args_: args
             }
         } as Type.ReactElement;
     }
-    CallAble.$$typeof = VUE_SLOT_TYPE;
-    CallAble.type = () => CallAble()
-    CallAble.props = {};
-    return CallAble;
+    Callable.$$typeof = REACT_ELEMENT_TYPE;
+    const GetChildren = () => Callable();
+    GetChildren.$$typeof = VUE_SLOT_CREATOR_TYPE;
+    Callable.type = GetChildren
+    Callable.props = {};
+    return Callable;
+}
+
+export function createSlot(name: string, context: { slots: Slots }) {
+    const Slot = ({_args_, ...rest}: { _args_: unknown[] }) => {
+        const fn = context.slots[name] || (() => void 0)
+        const node = fn(...(_args_ || []))
+        return node
+    }
+    Slot.$$typeof = VUE_SLOT_TYPE;
+    return createCallable(Slot);
 }
 
 namespace React {
@@ -350,7 +357,7 @@ namespace React {
     export type FC<P = {}> = Type.FC<P>;
 
 
-    export const Fragment = Symbol.for('react.fragment') as unknown as Type.Fragment;
+    export const Fragment = REACT_FRAGMENT as unknown as Type.Fragment;
 
 
     // === Hooks 实现 ===
@@ -718,8 +725,8 @@ namespace React {
 
 
     export function isValidElement(object: any): object is ReactElement {
-        return typeof object === 'object' &&
-        object !== null ? object.$$typeof === REACT_ELEMENT_TYPE : false;
+        return (typeof object === 'object' && object !== null || typeof object === 'function')
+            ? object.$$typeof === REACT_ELEMENT_TYPE : false;
     }
 
     // 模拟 React.createElement，将 React 元素转换为 Vue VNode
@@ -744,13 +751,22 @@ namespace React {
                 }
             }
         }
-        const _children = flattenChildren([...children, props?.children]);
-
+        const flatten = flattenChildren([...children, props?.children]);
+        const _children = flatten.flatMap(child => {
+            if (isValidElement(child)) {
+                const Render = child.type as { (): ReactNode; $$typeof: symbol }
+                if (Render.$$typeof === VUE_SLOT_CREATOR_TYPE) {
+                    return [Render()];
+                }
+            }
+            return [child];
+        });
+        console.log(_children);
         const element = {
             type: type,
             props: {
                 ...normalizedProps,
-                children: _children?.length == 0 ? null : _children.length === 1 ? _children[0] : _children
+                children: flatten?.length == 0 ? null : flatten.length === 1 ? flatten[0] : flatten
             },
             $$typeof: REACT_ELEMENT_TYPE
         }
@@ -766,8 +782,14 @@ namespace React {
 
     export function cloneElement<P extends object>(element: ReactElement, config: P, ...children: ReactNode[]) {
         // 1. 校验输入有效性
-        if (!element || typeof element !== 'object' || !element.type) {
+        if (!element || !element.type) {
             throw new Error('cloneElement: First argument must be a valid element');
+        }
+        if (typeof element !== 'object') {
+            if (isValidElement(element)) {
+            } else {
+                throw new Error('cloneElement: First argument must be a valid element');
+            }
         }
 
         // 2. 复制原元素的基础属性
@@ -797,7 +819,6 @@ namespace React {
         if (children.length) {
             newProps.children = children.length === 1 ? children[0] : children;
         }
-
         // 5. 返回新元素（保留 React 元素标识）
         return {
             ...element, // 继承原元素其他属性（如 $$typeof）

@@ -1,5 +1,52 @@
-import {ComponentObjectPropsOptions, Slots, VNode} from "vue";
-import {createSlot} from '@react-vue/react';
+import type {ComponentObjectPropsOptions, Slots, VNode, Slot,} from "vue";
+import React, {createSlot} from '@react-vue/react';
+import {createTextVNode, Fragment, h} from "vue";
+
+function resolveVNode(vNode: VNode) {
+    if (typeof vNode.type === 'string') {
+        const children = vNode.children;
+        let fragment: VNode;
+        if (Array.isArray(children)) {
+            fragment = h(Fragment, children)
+        } else {
+            fragment = typeof children === "string" ? createTextVNode(children) : createTextVNode('');
+        }
+        const props = parseVueProp(vNode.props as any);
+        if (typeof props.ref === 'string') {
+            const str = props.ref;
+            props.ref = (ele: Element) => {
+                (vNode as any).ctx.devtoolsRawSetupState[str].value = ele;
+            }
+        }
+        return React.createElement(vNode.type, props, createSlot(fragment))
+    } else {
+        return createSlot(vNode)
+    }
+}
+
+const resolveSlot = (slot: Slot) => {
+    if (slot.length == 0) {
+        const vNodes = slot();
+
+        return vNodes.map(v => {
+            return resolveVNode(v)
+        });
+    } else {
+        return (...args: unknown[]) => {
+            const vNodes = slot(...args)
+            return vNodes.map(v => resolveVNode(v));
+        }
+    }
+}
+
+function parseVueProp(vueProps: Record<string, unknown> = {},) {
+    const reactProps: Record<string, unknown> = {...vueProps};
+    if (reactProps.class) {
+        reactProps.className = reactProps.class;
+        delete reactProps.class
+    }
+    return reactProps;
+}
 
 /**
  * 将 Vue props 转换为 React props
@@ -16,18 +63,15 @@ export function vuePropsToReactProps(
     }
 ): Record<string, unknown> {
     const {slots, attrs} = context
-    const reactProps: Record<string, unknown> = {...vueProps, ...attrs};
-    if (reactProps.class) {
-        reactProps.className = reactProps.class;
-        delete reactProps.class
-    }
+    let reactProps: Record<string, unknown> = {...vueProps, ...attrs};
+    reactProps = parseVueProp(reactProps)
     Object.entries(slots).forEach(([k, v]) => {
-        reactProps[k === 'default' ? "children" : k] = v ? createSlot(k, context) : undefined
+        reactProps[k === 'default' ? "children" : k] = v ? resolveSlot(v) : undefined
     })
     return reactProps;
 }
 
-export function vNodeToJSON(vNode: VNode): Record<string, any> {
+export function vNodeToJSON(vNode: VNode): Record<string, any> | null {
     if (!vNode) return null;
 
     // 提取核心属性（根据需要增删）
@@ -43,7 +87,7 @@ export function vNodeToJSON(vNode: VNode): Record<string, any> {
                 typeof child === 'object' && child ? vNodeToJSON(child as VNode) : child
             )
             : typeof vNode.children === 'object' && vNode.children
-                ? vNodeToJSON(vNode.children as unknown as  VNode)
+                ? vNodeToJSON(vNode.children as unknown as VNode)
                 : vNode.children,  // 文本节点等
         shapeFlag: vNode.shapeFlag,  // 节点类型标识（如元素/组件/文本）
         // 注意：避免添加 parent/el 等循环引用属性

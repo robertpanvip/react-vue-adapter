@@ -7,7 +7,6 @@ import {
     type Ref as VueRef,
     shallowRef,
     type ShallowRef,
-    type Slots,
     Text,
     type VNode,
     type VNodeArrayChildren,
@@ -24,7 +23,7 @@ const CONSUMER_SYMBOL = Symbol.for('react.consumer');
 const REACT_ELEMENT_TYPE = Symbol.for('react.element');
 const REACT_FRAGMENT = Symbol.for('react.fragment');
 const VUE_SLOT_TYPE = Symbol.for('vue.slot');
-const VUE_SLOT_CREATOR_TYPE = Symbol.for('vue.slot.creator');
+
 // === 模拟 React Fiber 架构的上下文管理 ===
 interface RuntimeNode {
     runtime: Runtime;
@@ -201,11 +200,14 @@ export function createVNodeFromReactElement(ele: Type.ReactNode): VNode {
     // 5. 处理原生标签（div、span 等）
     if (typeof type === 'string') {
         const {children, ...rest} = props;
+        //console.log('children', children);
         const v = createVNodeFromReactElement(children);
         const ref = rest.ref;
-        if (ref && typeof ref === 'object') {
-            rest.ref = (node: VNode) => {
-                ref.current = node;
+        if (ref) {
+            if (typeof ref === 'object') {
+                rest.ref = (node: VNode) => {
+                    ref.current = node;
+                }
             }
         }
         return h(type, rest, v);
@@ -217,6 +219,8 @@ export function createVNodeFromReactElement(ele: Type.ReactNode): VNode {
         if ("$$typeof" in type) {
             if (type.$$typeof === VUE_SLOT_TYPE) {
                 const Slot = type as Type.VueSlot<any>;
+                //console.log('VUE_SLOT_TYPE');
+                //console.log(Slot(props));
                 return h(VueFragment, [Slot(props) as VNode])
             }
             let result: Type.ReactNode = null;
@@ -230,10 +234,10 @@ export function createVNodeFromReactElement(ele: Type.ReactNode): VNode {
             }
             return createVNodeFromReactElement(result) as VNode;
         }
-        const Comp = isClassComponent(type) ? wrapClassComponent(type) : type;
+        const Comp = isClassComponent(type) ? (wrapClassComponent(type) as any).render : type;
         // 函数组件的 children 仍需作为 props 传递（符合 React 习惯）
         const componentProps = {...props, children: children} as unknown as any;
-        const result = (Comp as Type.FunctionComponent)(componentProps)
+        const result = (Comp as Type.FunctionComponent)(componentProps, props.ref)
         return createVNodeFromReactElement(result);
     }
     if (isForwardRef(type)) {
@@ -241,6 +245,8 @@ export function createVNodeFromReactElement(ele: Type.ReactNode): VNode {
         const Comp = (_type as any).render as Type.ForwardRefRenderFunction<any>;
         const result = Comp(props, props.ref);
         return createVNodeFromReactElement(result);
+    }
+    if (typeof ele === "function") {
     }
 
     throw new Error(`Unsupported element type: ${type}`);
@@ -254,8 +260,8 @@ function isForwardRef(type: any): type is Type.ForwardRefExoticComponent<any> {
 }
 
 // 实现类组件的渲染转换（将类组件转换为可被 Vue 识别的函数组件）
-function wrapClassComponent<P, S = {}>(ComponentClass: typeof Component<P, S>): Type.FC<P> {
-    return (props: P) => {
+function wrapClassComponent<P, S = {}>(ComponentClass: typeof Component<P, S>): Type.ForwardRefExoticComponent<Type.PropsWithoutRef<P> & Type.RefAttributes<React.Component<P, S>>> {
+    return forwardRef((props: P, ref) => {
         // 1. 创建组件实例（仅在首次渲染时）
         const [instance] = useState(() => new ComponentClass(props));
         const [state, setState] = useState<S>({} as S);
@@ -288,37 +294,23 @@ function wrapClassComponent<P, S = {}>(ComponentClass: typeof Component<P, S>): 
                 instance.componentDidUpdate(instance.props, instance.state);
             }
         }, [props, state]);
+        useImperativeHandle(ref, () => instance)
 
         // 5. 执行 render 并转换为 Vue VNode
         return instance.render();
-    };
+    });
 }
 
-function createCallable(Slot: Function) {
-    const Callable = (...args: unknown[]) => {
-        return {
-            type: Slot,
-            props: {
-                _args_: args
-            }
-        } as Type.ReactElement;
-    }
-    Callable.$$typeof = REACT_ELEMENT_TYPE;
-    const GetChildren = () => Callable();
-    GetChildren.$$typeof = VUE_SLOT_CREATOR_TYPE;
-    Callable.type = GetChildren
-    Callable.props = {};
-    return Callable;
-}
-
-export function createSlot(name: string, context: { slots: Slots }) {
-    const Slot = ({_args_, ...rest}: { _args_: unknown[] }) => {
-        const fn = context.slots[name] || (() => void 0)
-        const node = fn(...(_args_ || []))
-        return node
+export function createSlot(vNode: VNode) {
+    const Slot = (props: object) => {
+        const extraProps = {
+            ...vNode.props,
+            ...props
+        }
+        return cloneVNode(vNode, extraProps)
     }
     Slot.$$typeof = VUE_SLOT_TYPE;
-    return createCallable(Slot);
+    return createElement(Slot as any, vNode.props);
 }
 
 namespace React {
@@ -751,17 +743,10 @@ namespace React {
                 }
             }
         }
-        const flatten = flattenChildren([...children, props?.children]);
-        const _children = flatten.flatMap(child => {
-            if (isValidElement(child)) {
-                const Render = child.type as { (): ReactNode; $$typeof: symbol }
-                if (Render.$$typeof === VUE_SLOT_CREATOR_TYPE) {
-                    return [Render()];
-                }
-            }
-            return [child];
-        });
-        console.log(_children);
+        if (children.length > 0) {
+            normalizedProps.children = children;
+        }
+        const flatten = normalizedProps.children || [];
         const element = {
             type: type,
             props: {
@@ -819,6 +804,8 @@ namespace React {
         if (children.length) {
             newProps.children = children.length === 1 ? children[0] : children;
         }
+        newProps.key = newKey;
+        newProps.ref = newRef;
         // 5. 返回新元素（保留 React 元素标识）
         return {
             ...element, // 继承原元素其他属性（如 $$typeof）
@@ -842,6 +829,17 @@ namespace React {
         componentDidUpdate?(prevProps: P, prevState: S): void;
 
         componentWillUnmount?(): void;
+    }
+
+    export function createRef() {
+        const refObject = {
+            current: null
+        };
+
+        {
+            Object.seal(refObject);
+        }
+        return refObject;
     }
 
     export class Component<P = {}, S = {}> extends ComponentLifecycle<P, S> {
@@ -899,6 +897,7 @@ export const createElement = React.createElement;
 export const memo = React.memo;
 export const Children = React.Children;
 export const cloneElement = React.cloneElement;
+export const createRef = React.createRef;
 export const forwardRef = React.forwardRef;
 export const Fragment = React.Fragment;
 export const isValidElement = React.isValidElement;

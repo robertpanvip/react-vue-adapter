@@ -7,6 +7,7 @@ import RcInput from './components/RcInput.ts';
 import AntdInput from './components/AntdInput.ts';
 import Select from './components/Select.ts';
 import Trigger from './components/Trigger.ts';
+import Observer from './components/Observer.ts';
 //import Alert from './components/Alert.ts';
 import Result from './components/Result.ts';
 import Spin from './components/Spin.ts';
@@ -16,7 +17,11 @@ import Modal from './components/Modal.ts';
 //import Provider from './components/Select2.ts'
 const anchor = ref()
 onMounted(() => {
-  //console.log(anchor.value);
+  setTimeout(() => {
+    //anchor.value.style.width = '150px'
+  },2000)
+
+  console.log(anchor.value);
 })
 </script>
 <template>
@@ -24,16 +29,19 @@ onMounted(() => {
       <div>123</div>
     </Provider>-->
   <!--  <RcInput />-->
-  <Trigger :action="['click']" :popupAlign="{
-                points: ['tl', 'bl'],
-                offset: [0, 3],
-            }">
-    <button>trigger</button>
-    <template #popup>
-      <div>123</div>
-    </template>
-  </Trigger>
-<!--  <Select :options="[{label:`1232`,value:`12`}]"/>-->
+    <Trigger :action="['click']" :popupAlign="{
+                  points: ['tl', 'bl'],
+                  offset: [0, 3],
+              }">
+      <button class="a" ref="anchor">trigger</button>
+      <template #popup>
+        <div>123</div>
+      </template>
+    </Trigger>
+<!--  <Observer :onResize="(e)=>{console.log(e)}">
+    <button class="a" ref="anchor">Observer</button>
+  </Observer>-->
+  <!--  <Select :options="[{label:`1232`,value:`12`}]"/>-->
   <!--  <Alert message="Success Text" type="success" />-->
   <!--  <Button type="primary" key="console">
       Go Console

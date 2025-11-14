@@ -8,11 +8,7 @@ export function render(Component: any, container: HTMLElement) {
 
 export const createPortal = (children: React.ReactNode, container: HTMLElement) => {
     const _children = createVNodeFromReactElement(children);
-    return createSlot("default", {
-        slots: {
-            default: () => [h(Teleport, {to: container}, _children)]
-        }
-    })
+    return createSlot(h(Teleport, {to: container}, _children))
 }
 
 

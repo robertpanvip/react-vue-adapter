@@ -3,10 +3,8 @@ import {
     Fragment as VueFragment,
     h,
     isRef,
-    ref,
     type Ref as VueRef,
     shallowRef,
-    type ShallowRef,
     Text,
     type VNode,
     type VNodeArrayChildren,
@@ -38,6 +36,8 @@ type Dispatcher = {
 }
 // 用栈管理当前组件的节点（替代全局变量）
 const runtimeStack: RuntimeNode[] = [];
+let globalComponentId = 0;
+
 export const CurrentReactContext: Dispatcher = {
     current: null,
     // 入栈：进入组件渲染
@@ -60,6 +60,9 @@ export const CurrentReactContext: Dispatcher = {
             pendingLayoutEffects: [],
             pendingInsertionEffects: [],
             contextMap: new Map(),
+            idCounter: 0,
+            componentId: globalComponentId++,
+            isRendering: false,
         };
     }
 }
@@ -80,18 +83,21 @@ export interface Runtime {
     pendingLayoutEffects: Effect[]; // 待执行的副作用（useLayoutEffects）
     pendingInsertionEffects: Effect[]; // 待执行的副作用（useInsertionEffects）
     contextMap: Map<Type.Context<any>, any>; // 存储 Context 订阅
+    idCounter: number;   // 新增
+    componentId: number; // 新增
+    isRendering: boolean;
 }
 
 // 单个 Hook 的类型（支持不同类型的 hook）
 type Hook =
-    | { type: 'state'; ref: VueRef<any>, updateQueue?: (() => void)[], isFlushing?: boolean }
-    | { type: 'ref'; ref: ShallowRef<{ current: any }> }
-    | { type: 'memo'; deps: unknown[] | undefined; value: VueRef<any> }
-    | { type: 'callback'; deps: unknown[] | undefined; value: VueRef<Function> }
-    | { type: 'imperative', ref: ShallowRef }
+    | { type: 'state'; ref: VueRef<any>, updateQueue?: Type.SetStateAction<any>[], isFlushing?: boolean }
+    | { type: 'ref'; ref: { current: any } }
+    | { type: 'memo'; deps: unknown[] | undefined; value: any }
+    | { type: 'callback'; deps: unknown[] | undefined; value: Function }
+    | { type: 'imperative', ref: any }
     | { type: 'id', value: string }
-    | { type: 'effect'; deps: unknown[] | undefined; cleanup: VueRef<(() => void) | null> }
-    | { type: 'layoutEffect'; deps: unknown[]; cleanup: VueRef<(() => void) | null> }
+    | { type: 'effect'; deps: unknown[] | undefined; cleanup: (() => void) | null }
+    | { type: 'layoutEffect'; deps: unknown[]; cleanup: (() => void) | null }
     | { type: 'insertionEffect'; deps: unknown[] | undefined; cleanup: (() => void) | null };
 
 // 副作用类型（模拟 React 的 effect 调度）
@@ -141,8 +147,8 @@ export function flushEffects(runtime: Runtime) {
 // === 组件卸载时清理所有副作用 ===
 export function cleanupEffects(runtime: Runtime) {
     runtime.hooks.forEach(hook => {
-        if (hook.type === 'effect' && hook.cleanup.value) {
-            hook.cleanup.value(); // 执行清理函数
+        if (["effect", "layoutEffect", "insertionEffect"].includes(hook.type) && hook.cleanup) {
+            hook.cleanup(); // 执行清理函数
         }
     });
 }
@@ -166,13 +172,51 @@ export function flushLayoutEffects(runtime: Runtime) {
 
     // 2. 同步执行新 effect
     effects.forEach(e => {
-        const cleanup = e.fn();
-        if (typeof cleanup === 'function') e.cleanup = cleanup;
+        try {
+            const cleanup = e.fn();
+            if (typeof cleanup === 'function') e.cleanup = cleanup;
+        } catch (e) {
+            console.error(e);
+        }
     });
 }
 
 function isClassComponent(type: Function): type is typeof Component {
     return typeof type.prototype === 'object' && type.prototype instanceof Component && typeof type.prototype.render === 'function'
+}
+
+const transformReactEventNames = [
+    'onMouseDown',
+    'onMouseUp',
+    'onMouseEnter',
+    'onMouseLeave',
+    'onDoubleClick',
+    'onContextMenu',
+    'onMouseMove',
+    'onMouseOut',
+    'onMouseOver',
+
+    'onKeyDown',
+    'onKeyUp',
+    'onTouchStart',
+    'onTouchMove',
+    'onTouchEnd',
+    'onTouchCancel',
+
+    'onDragStart',
+    'onDragEnd',
+    'onDragOver',
+    'onDragEnter',
+    'onDragLeave',
+]
+const ReactEventNames = new Map(transformReactEventNames.map(n => [n, n]));
+
+function reactEventToVue(eventName: string): string {
+    if (ReactEventNames.has(eventName)) {
+        // 将字母小写
+        return eventName.toLowerCase();
+    }
+    return eventName;
 }
 
 // 模拟 React.createElement，将 React 元素转换为 Vue VNode
@@ -210,7 +254,13 @@ export function createVNodeFromReactElement(ele: Type.ReactNode): VNode {
                 }
             }
         }
-        return h(type, rest, v);
+
+        const entries = Object.entries(rest)
+            .map(([key, value]) => {
+                const k = typeof value === 'function' ? reactEventToVue(key) : key;
+                return [k, value]
+            });
+        return h(type, Object.fromEntries(entries), v);
     }
 
 // 4. 处理函数组件
@@ -219,8 +269,6 @@ export function createVNodeFromReactElement(ele: Type.ReactNode): VNode {
         if ("$$typeof" in type) {
             if (type.$$typeof === VUE_SLOT_TYPE) {
                 const Slot = type as Type.VueSlot<any>;
-                //console.log('VUE_SLOT_TYPE');
-                //console.log(Slot(props));
                 return h(VueFragment, [Slot(props) as VNode])
             }
             let result: Type.ReactNode = null;
@@ -246,8 +294,6 @@ export function createVNodeFromReactElement(ele: Type.ReactNode): VNode {
         const result = Comp(props, props.ref);
         return createVNodeFromReactElement(result);
     }
-    if (typeof ele === "function") {
-    }
 
     throw new Error(`Unsupported element type: ${type}`);
 }
@@ -264,17 +310,62 @@ function wrapClassComponent<P, S = {}>(ComponentClass: typeof Component<P, S>): 
     return forwardRef((props: P, ref) => {
         // 1. 创建组件实例（仅在首次渲染时）
         const [instance] = useState(() => new ComponentClass(props));
-        const [state, setState] = useState<S>({} as S);
+        // classState 执行器：替代 useState 的 class setState 逻辑
+        const [, forceUpdate] = useState({});
+
+        // 用 ref 存 queue，避免每次 render 重新创建
+        const queueRef = useRef<{
+            updaters: Array<((prev: S, props: P) => Partial<S>) | Partial<S>>;
+            callbacks: Array<() => void>;
+            pending: boolean;
+        }>({
+            updaters: [],
+            callbacks: [],
+            pending: false
+        });
+
+        const queue = queueRef.current;
+
+        // 2. 替换 instance.setState，完全按 class 逻辑实现
+        instance.setState = (updater, callback) => {
+            queue.updaters.push(updater as any);
+            if (callback) queue.callbacks.push(callback);
+
+            // 批量更新（React 的行为）
+            if (!queue.pending) {
+                queue.pending = true;
+                Promise.resolve().then(() => {
+                    queue.pending = false;
+
+                    let nextState = {...instance.state};
+
+                    // 合并所有更新（React class 的逻辑）
+                    for (const u of queue.updaters) {
+                        if (typeof u === "function") {
+                            nextState = {
+                                ...nextState,
+                                ...(u as (prev: S, props: P) => Partial<S>)(nextState, instance.props)
+                            };
+                        } else {
+                            nextState = {...nextState, ...u};
+                        }
+                    }
+
+                    queue.updaters.length = 0;
+
+                    instance.state = nextState;
+                    forceUpdate({}); // 触发渲染
+
+                    // 执行回调
+                    const cbs = [...queue.callbacks];
+                    queue.callbacks.length = 0;
+                    cbs.forEach(cb => cb());
+                });
+            }
+        };
 
         // 2. 同步 props 到实例（每次渲染时更新）
         Object.assign(instance.props, props);
-        instance.state = state;
-        instance.setState = (updater, callback?: () => void) => {
-            setState((prevState) => {
-                return typeof updater == 'function' ? (updater as (prev: S, props: P) => any)(prevState, props) : updater
-            });
-            Promise.resolve().then(callback)
-        }
         // 3. 模拟生命周期：componentDidMount（仅执行一次）
         useEffect(() => {
             if (instance.componentDidMount) {
@@ -293,7 +384,7 @@ function wrapClassComponent<P, S = {}>(ComponentClass: typeof Component<P, S>): 
             if (instance.componentDidUpdate) {
                 instance.componentDidUpdate(instance.props, instance.state);
             }
-        }, [props, state]);
+        }, [props, instance.state]);
         useImperativeHandle(ref, () => instance)
 
         // 5. 执行 render 并转换为 Vue VNode
@@ -355,15 +446,16 @@ namespace React {
     // === Hooks 实现 ===
     export function useState<T>(initialState: T | (() => T)): [T, Dispatch<SetStateAction<T>>] {
 
-        const [_, hook] = ensureHooks(() => {
+        const [runtime, hook] = ensureHooks(() => {
             const initialValue = typeof initialState === 'function'
                 ? (initialState as () => T)()
                 : initialState;
+            const updateQueue = [] as SetStateAction<T>[];
             return {
                 type: 'state',
-                ref: ref<T>(initialValue),
+                ref: shallowRef<T>(initialValue),
                 isFlushing: false as boolean,
-                updateQueue: [] as (() => void)[]
+                updateQueue
             }
         })
 
@@ -374,21 +466,41 @@ namespace React {
             hook.isFlushing = true;
             Promise.resolve().then(() => {
                 const queue = hook.updateQueue.splice(0, hook.updateQueue.length);
-                queue.forEach(fn => fn());
+                if (queue.length === 0) {
+                    hook.isFlushing = false;
+                    return;
+                }
+
+                // 从旧值开始计算
+                let nextValue = stateRef.value;
+
+                // React 的 batchModel: 所有 updater 连续计算
+                for (const updater of queue) {
+                    if (typeof updater === 'function') {
+                        nextValue = (updater as (prev: T) => T)(nextValue);
+                    } else {
+                        nextValue = updater;
+                    }
+                }
+
+                // 合并后一次性赋值
+                if (!Object.is(nextValue, stateRef.value)) {
+                    //console.log('stateRef.value', stateRef.value, nextValue);
+                    stateRef.value = nextValue;
+                }
+
                 hook.isFlushing = false;
             });
         };
 
         const setState: Dispatch<SetStateAction<T>> = (updater) => {
-            const newValue = typeof updater === 'function'
-                ? (updater as (prev: T) => T)(stateRef.value)
-                : updater;
-            if (newValue !== stateRef.value) {
-                hook.updateQueue.push(() => {
-                    stateRef.value = newValue;
-                });
-                flushUpdates();
+            if (runtime.isRendering) {
+                console.warn("setState cannot be called during render");
+                return;
             }
+            // 记录 updater，而不是直接计算
+            hook.updateQueue.push(updater);
+            flushUpdates();
         };
 
         return [stateRef.value, setState];
@@ -399,15 +511,15 @@ namespace React {
         const [runtime, hook] = ensureHooks({
             type: 'effect',
             deps: undefined as any,
-            cleanup: ref<(() => void) | null>(null),
+            cleanup: null as (() => void) | null,
         })
-
+        runtime.isRendering = false;
         // 检查依赖是否变化（严格模拟 React 的浅比较）
         if (depsChanged(hook.deps, deps)) {
             // 存储新的副作用（将在渲染后异步执行）
             runtime.pendingEffects.push({
                 fn: effect,
-                cleanup: hook.cleanup.value,
+                cleanup: hook.cleanup,
                 deps,
             });
             hook.deps = deps; // 更新依赖缓存
@@ -419,25 +531,31 @@ namespace React {
         const [_, hook] = ensureHooks({
             type: 'memo',
             deps: undefined as any,
-            value: ref<T>(factory()),
+            value: factory(),
         })
 
         // 依赖变化时重新计算（同 React 逻辑）
         if (depsChanged(hook.deps, deps)) {
             hook.deps = deps;
-            hook.value.value = factory();
+            hook.value = factory();
         }
-        return hook.value.value;
+        return hook.value;
     }
 
-    export function useRef<T>(initialValue?: T): { current: T | undefined } {
+    export function useRef<T>(initialValue: T): MutableRefObject<T>;
+    export function useRef<T>(initialValue: T | null): RefObject<T>;
+    export function useRef<T = undefined>(initialValue?: undefined): MutableRefObject<T | undefined>;
+    export function useRef<T>(initialValue: T): { current: T } {
 
         const [_, hook] = ensureHooks({
             type: 'ref',
-            ref: shallowRef<{ current: T | undefined }>({current: initialValue}),
+            ref: {current: initialValue},
         })
+        if (hook.ref === undefined) {
+            console.log(hook.ref, _);
+        }
 
-        return hook.ref.value; // 返回 { current }，与 React 一致
+        return hook.ref as any; // 返回 { current }，与 React 一致
     }
 
     export function useCallback<T extends (...args: any[]) => any>(callback: T, deps: any[]): T {
@@ -449,7 +567,9 @@ namespace React {
 // === Context 支持（模拟 React.createContext 和 useContext） ===
     export function createContext<T>(defaultValue: T): Context<T> {
 // 每个 context 都维护自己的栈
-        const contentValue = shallowRef(defaultValue)
+        const contentValue = {
+            value: defaultValue
+        }
 
         // 1. 创建唯一注入键（Vue 依赖注入的核心）
         const Provider = ({value, children}: ProviderProps<T>) => {
@@ -487,8 +607,11 @@ namespace React {
         if (typeof create !== 'function') {
             throw new Error(`Unsupported create type: ${typeof create}`);
         }
-        const [_, hook] = ensureHooks({type: 'imperative', ref: shallowRef<T | null>(null)})
-        hook.ref.value = create();
+        const [_, hook] = ensureHooks({
+            type: 'imperative',
+            ref: null as T | null
+        })
+        hook.ref = create();
         // 1. 处理 ref 同步（支持函数和 Ref 对象）
         const syncRef = (instance: T | null) => {
             if (typeof ref === 'function') {
@@ -498,7 +621,7 @@ namespace React {
             }
         };
         // 绑定到 ref
-        if (ref) syncRef(hook.ref.value)
+        if (ref) syncRef(hook.ref)
     }
 
 // 模拟 React.forwardRef（完全对齐行为）
@@ -513,11 +636,11 @@ namespace React {
         return elementType as unknown as ForwardRefExoticComponent<PropsWithoutRef<P> & RefAttributes<T>>;
     }
 
-    function ensureHooks<T extends Hook>(defaultHook: T | (() => T)) {
+    function ensureHooks<T extends Hook>(defaultHook: T | ((runtime: Runtime) => T)) {
         const runtime = ensureCurrentRuntime();
         const index = runtime.hookIndex++;
         if (!runtime.hooks[index]) {
-            runtime.hooks[index] = typeof defaultHook === 'function' ? defaultHook() : defaultHook;
+            runtime.hooks[index] = typeof defaultHook === 'function' ? defaultHook(runtime) : defaultHook;
         }
         return [runtime, runtime.hooks[index] as T] as const
     }
@@ -529,14 +652,14 @@ namespace React {
         const [runtime, hook] = ensureHooks({
             type: 'layoutEffect',
             deps: undefined as any,
-            cleanup: ref<(() => void) | null>(null),
+            cleanup: null as (() => void) | null,
         })
-
+        runtime.isRendering = false;
         if (depsChanged(hook.deps, deps)) {
             runtime.pendingLayoutEffects = runtime.pendingLayoutEffects || [];
             runtime.pendingLayoutEffects.push({
                 fn: effect,
-                cleanup: hook.cleanup.value,
+                cleanup: hook.cleanup,
                 deps,
             });
             hook.deps = deps ? [...deps] : undefined;
@@ -565,6 +688,7 @@ namespace React {
             deps: undefined as any,
             cleanup: null,
         });
+        runtime.isRendering = false;
         if (depsChanged(hook.deps, deps)) {
             runtime.pendingInsertionEffects = runtime.pendingInsertionEffects || [];
             runtime.pendingInsertionEffects.push({
@@ -605,10 +729,11 @@ namespace React {
     }
 
 
-    let idCounter = 0;
-
     export function useId() {
-        const [_, hook] = ensureHooks({type: 'id', value: `:${idCounter++}:`})
+        const [_, hook] = ensureHooks((runtime) => {
+            const localId = runtime.idCounter++;
+            return {type: 'id', value: `:r${runtime.componentId}_${localId}:`,}
+        })
         return hook.value;
     }
 

@@ -43,7 +43,10 @@ export function factory<P = {}>(
             const runReactCommitPhase = () => {
                 flushInsertionEffects(runtime); // 先样式
                 flushLayoutEffects(runtime);    // 再 layout
-                Promise.resolve().then(() => flushEffects(runtime)); // 最后异步 effect
+
+                Promise.resolve().then(() => {
+                    flushEffects(runtime)
+                }); // 最后异步 effect
             };
 
             onMounted(runReactCommitPhase);
@@ -62,8 +65,10 @@ export function factory<P = {}>(
                     _props.ref = (node: object) => {
                         Object.assign(expose, node)
                     }
+                    runtime.isRendering = true;
                     const ele = createElement(ReactComponent, _props);
                     result = createVNodeFromReactElement(ele);
+                    runtime.isRendering = false;
                 } finally {
                     CurrentReactContext.pop();
                 }

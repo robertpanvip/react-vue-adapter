@@ -2,23 +2,21 @@ import {Input, ConfigProvider} from 'antd'
 import React from '@react-vue/react'
 import {factory} from '@react-vue/adapter'
 function useStyle(css: string, uniqueId: string) {
+    const ref = React.useRef<HTMLInputElement>()
     React.useInsertionEffect(() => {
-        console.log('useInsertionEffect');
-        if (document.getElementById(uniqueId)) return;
 
-        const style = document.createElement('style');
-        style.id = uniqueId;
-        style.textContent = css;
-        document.head.appendChild(style);
+        console.log('useInsertionEffect');
+        ref.current={a:123}
 
         return () => {
-            document.head.removeChild(style);
+
+            console.log('useInsertionEffect-unmount', ref.current);
         };
     }, [css, uniqueId]);
 }
 function MyInput() {
-    //useStyle('antd-xxx','xx2')
+    useStyle('antd-xxx','xx2')
     return React.createElement(Input)
 }
 
-export default factory(Input)
+export default factory(MyInput)

@@ -7,6 +7,7 @@ import RcInput from './components/RcInput.ts';
 import AntdInput from './components/AntdInput.ts';
 import Select from './components/Select.ts';
 import Trigger from './components/Trigger.ts';
+import Portal from './components/Portal.ts';
 import Observer from './components/Observer.ts';
 //import Alert from './components/Alert.ts';
 import Result from './components/Result.ts';
@@ -25,23 +26,25 @@ onMounted(() => {
 })
 </script>
 <template>
+  <AntdInput/>
   <!--  <Provider :value="{}">
       <div>123</div>
     </Provider>-->
   <!--  <RcInput />-->
-    <Trigger :action="['click']" :popupAlign="{
-                  points: ['tl', 'bl'],
-                  offset: [0, 3],
-              }">
+
+<!--    <Trigger :action="['click']" :forceRender="false">
       <button class="a" ref="anchor">trigger</button>
       <template #popup>
         <div>123</div>
       </template>
-    </Trigger>
+    </Trigger>-->
+<!--  <Trigger>
+    <button class="a" ref="anchor">trigger</button>
+  </Trigger>-->
 <!--  <Observer :onResize="(e)=>{console.log(e)}">
     <button class="a" ref="anchor">Observer</button>
   </Observer>-->
-  <!--  <Select :options="[{label:`1232`,value:`12`}]"/>-->
+<!--    <Select :options="[{label:`1232`,value:`12`}]"/>-->
   <!--  <Alert message="Success Text" type="success" />-->
   <!--  <Button type="primary" key="console">
       Go Console
@@ -59,7 +62,7 @@ onMounted(() => {
   <!--  <Pagination defaultCurrent="1" total="50" />-->
   <!--  <Switch/>-->
 
-  <!--    <Modal
+<!--      <Modal
           title="Basic Modal"
           :open="true"
       >
